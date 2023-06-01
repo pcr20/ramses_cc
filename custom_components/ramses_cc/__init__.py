@@ -11,6 +11,165 @@ import logging
 from typing import Any
 
 import ramses_rf
+
+
+
+import aioesphomeapi
+import asyncio
+
+import sys, importlib
+import ramses_rf
+
+def import_module_from_string(parent_name,name: str, source: str):
+  """
+  Import module from source string.
+  Example use:
+  import_module_from_string("m", "f = lambda: print('hello')")
+  m.f()
+  """
+  parent_module = importlib.import_module(parent_name)
+  spec = importlib.util.spec_from_loader(name, loader=None)
+  module = importlib.util.module_from_spec(spec)
+  absolute_name = importlib.util.resolve_name("."+name, parent_name)
+  sys.modules[absolute_name] = module
+  exec(source, module.__dict__)
+  setattr(parent_module, name, module)
+
+
+import_module_from_string('ramses_rf','protocol_esphomeapi',"""
+class klass():
+    def __init__(self, junk, *args, **kwargs):
+        return
+    def open(self):
+        return
+        
+def serial_class_for_url(url):
+    return url,klass
+"""
+)
+
+#url, klass = ramses_rf.protocol_foobar.serial_class_for_url("url")
+
+
+import serial
+serial.protocol_handler_packages.append("ramses_rf")
+
+
+
+
+from queue import Queue
+#from ramses_rf.protocol.transport import POLLER_TASK
+POLLER_TASK='poller_task'
+class EspHomeAPITransport(asyncio.Transport):
+    """Interface for a packet transport using polling."""
+
+    MAX_BUFFER_SIZE = 500
+
+    def __init__(self, loop, protocol, ser_instance, extra=None):
+        super().__init__(extra=extra)
+
+        self._loop = loop
+        self._protocol = protocol
+        self.serial = ser_instance
+        self._cli=None
+        self._is_closing = None
+        self._write_queue = None
+        self._sensors = None
+        self._services = None
+
+        self._extra[POLLER_TASK] = self._loop.create_task(self._polling_loop())
+        #self._extra[POLLER_TASK] = self._start()
+
+    async def _serialwrite(self,data: str ):
+        await self._cli.execute_service(self._services[0], {"send_data": data})
+        #print("data sent: {}".format(data))
+
+    async def _subscribe_state_changes(self):
+        def change_callback(state):
+            """Print the state changes of the device.."""
+            if state.key in [t.key for t in self._sensors if "evohome" in t.name]:
+                #print(state, self._sensors)
+                #print(state.state)
+                self._protocol.data_received(state.state.encode())
+
+        # Subscribe to the state changes
+        await self._cli.subscribe_states(change_callback)
+
+    async def _start(self):
+        self._write_queue = Queue(maxsize=self.MAX_BUFFER_SIZE)
+        cli = aioesphomeapi.APIClient("esphome-web-39fca8.local", 6053, None,
+                                      noise_psk="MtaqewXP8Jim+YPbyFe0NhUUt8lPEg2JAb03VJp8WQ4=")
+        await cli.connect(login=True)
+
+        # Get API version of the device's firmware
+        print(cli.api_version)
+
+        # Show device details
+        device_info = await cli.device_info()
+        print(device_info)
+
+        # List all entities of the device
+        entities = await cli.list_entities_services()
+        self._cli=cli
+        self._sensors=entities[0]
+        self._services = entities[1]
+        print(entities)
+        await self._subscribe_state_changes()
+        self._protocol.connection_made(self)
+
+    async def _polling_loop(self):
+
+        await self._start()
+
+        while True:
+            await asyncio.sleep(0.001)
+
+            if self._cli._connection is None:
+                await self._cli.connect(login=True)#TODO resubscribe??
+                await self._subscribe_state_changes()
+
+
+            if not self._write_queue.empty():
+                await self._serialwrite(self._write_queue.get())
+                self._write_queue.task_done()
+
+        self._protocol.connection_lost(exc=None)
+
+    def write(self, cmd):
+        """Write some data bytes to the transport.
+
+        This does not block; it buffers the data and arranges for it to be sent out
+        asynchronously.
+        """
+        #print("writing: {}".format(cmd))
+        self._write_queue.put_nowait(cmd)
+
+import ramses_rf.protocol.transport
+ramses_rf.protocol.transport.SerTransportAsync=EspHomeAPITransport
+ramses_rf.protocol.transport.SerTransportPoll=EspHomeAPITransport
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import voluptuous as vol
 from homeassistant.const import (
     EVENT_HOMEASSISTANT_START,

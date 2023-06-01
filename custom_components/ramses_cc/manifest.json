@@ -4,7 +4,8 @@
     "documentation": "https://github.com/zxdavb/ramses_cc",
     "requirements": [
       "ramses-rf==0.22.40",
-      "pyserial-asyncio==0.6"
+      "pyserial-asyncio==0.6",
+	  "aioesphomeapi",
     ],
     "dependencies": [],
     "issue_tracker": "https://github.com/zxdavb/ramses_cc/issues",
