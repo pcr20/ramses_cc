@@ -11,6 +11,43 @@ import logging
 from typing import Any
 
 import ramses_rf
+import voluptuous as vol
+from homeassistant.const import (
+    EVENT_HOMEASSISTANT_START,
+    PRECISION_TENTHS,
+    Platform,
+    UnitOfTemperature,
+)
+from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.service import verify_domain_control
+from homeassistant.helpers.typing import ConfigType, HomeAssistantType
+
+from .const import BROKER, DOMAIN
+from .coordinator import RamsesCoordinator
+from .schemas import (
+    SCH_DOMAIN_CONFIG,
+    SVC_SEND_PACKET,
+    SVCS_DOMAIN,
+    SZ_ADVANCED_FEATURES,
+    SZ_MESSAGE_EVENTS,
+)
+from .version import __version__ as VERSION
+
+_LOGGER = logging.getLogger(__name__)
+
+
+CONFIG_SCHEMA = vol.Schema({DOMAIN: SCH_DOMAIN_CONFIG}, extra=vol.ALLOW_EXTRA)
+
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.CLIMATE,
+    Platform.SENSOR,
+    Platform.WATER_HEATER,
+]
+
+
 
 
 
@@ -18,7 +55,6 @@ import aioesphomeapi
 import asyncio
 
 import sys, importlib
-import ramses_rf
 
 def import_module_from_string(parent_name,name: str, source: str):
   """
@@ -42,8 +78,13 @@ class klass():
         return
     def open(self):
         return
-        
+
+import logging
+
 def serial_class_for_url(url):
+    _LOGTEMP=logging.getLogger(__name__)
+    _LOGTEMP.warning("serial_class_for_url called: %s",url)
+
     return url,klass
 """
 )
@@ -77,8 +118,11 @@ class EspHomeAPITransport(asyncio.Transport):
         self._sensors = None
         self._services = None
 
+        _LOGGER.warning("EspHomeAPITransport init called %s",ser_instance)
         self._extra[POLLER_TASK] = self._loop.create_task(self._polling_loop())
         #self._extra[POLLER_TASK] = self._start()
+        _LOGGER.warning("EspHomeAPITransport init finished %s",ser_instance)
+
 
     async def _serialwrite(self,data: str ):
         await self._cli.execute_service(self._services[0], {"send_data": data})
@@ -95,37 +139,59 @@ class EspHomeAPITransport(asyncio.Transport):
         # Subscribe to the state changes
         await self._cli.subscribe_states(change_callback)
 
+
+    async def _setupesphome(self):
+        assert not self._cli,"esphomeapi must be connected"
+        if not self._sensors:
+             entities = await self._cli.list_entities_services()
+             self._sensors = entities[0]
+        if not self._services:
+             entities = await self._cli.list_entities_services()
+             self._services = entities[1]
+
     async def _start(self):
+        _LOGGER.warning("EspHomeAPITransport _start called")
         self._write_queue = Queue(maxsize=self.MAX_BUFFER_SIZE)
         cli = aioesphomeapi.APIClient("esphome-web-39fca8.local", 6053, None,
                                       noise_psk="MtaqewXP8Jim+YPbyFe0NhUUt8lPEg2JAb03VJp8WQ4=")
-        await cli.connect(login=True)
+        self._cli=cli
+
+        while not self._cli._connection:
+            try: 
+               await self._cli.connect(login=True)
+               break
+            except:
+               await asyncio.sleep(1.0)
 
         # Get API version of the device's firmware
-        print(cli.api_version)
+        _LOGGER.warning("esphomeAPI verion: %s",cli.api_version)
 
         # Show device details
         device_info = await cli.device_info()
         print(device_info)
 
         # List all entities of the device
-        entities = await cli.list_entities_services()
-        self._cli=cli
-        self._sensors=entities[0]
-        self._services = entities[1]
-        print(entities)
+        await self._setupesphome()
+
+        _LOGGER.warning("esphomeAPI sensor: %s",self._sensors)
+        _LOGGER.warning("esphomeAPI services: %s",self._services)
+
         await self._subscribe_state_changes()
+        _LOGGER.warning("esphomeAPI subscribed")
+
         self._protocol.connection_made(self)
 
     async def _polling_loop(self):
 
         await self._start()
+        _LOGGER.warning("esphomeAPI _polling_loop called _start() completed")
 
         while True:
             await asyncio.sleep(0.001)
 
             if self._cli._connection is None:
                 await self._cli.connect(login=True)#TODO resubscribe??
+                await self._setupesphome()
                 await self._subscribe_state_changes()
 
 
@@ -145,6 +211,13 @@ class EspHomeAPITransport(asyncio.Transport):
         self._write_queue.put_nowait(cmd)
 
 import ramses_rf.protocol.transport
+
+
+_LOGGER.warning(
+    "ramses_rf now: %s",ramses_rf.protocol.transport.SerTransportAsync
+)
+
+
 ramses_rf.protocol.transport.SerTransportAsync=EspHomeAPITransport
 ramses_rf.protocol.transport.SerTransportPoll=EspHomeAPITransport
 
@@ -167,115 +240,61 @@ ramses_rf.protocol.transport.SerTransportPoll=EspHomeAPITransport
 
 
 
-
-
-
-import voluptuous as vol
-from homeassistant.const import (
-    EVENT_HOMEASSISTANT_START,
-    PRECISION_TENTHS,
-    Platform,
-    UnitOfTemperature,
+_LOGGER.warning(
+    "ramses_rf has been successfully patched: %s",ramses_rf.protocol.transport.SerTransportAsync
 )
-from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import Entity
-from homeassistant.helpers.service import verify_domain_control
-from homeassistant.helpers.typing import ConfigType, HomeAssistantType
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-
-from .const import BROKER, DOMAIN
-from .coordinator import RamsesBroker
-from .schemas import (
-    SCH_DOMAIN_CONFIG,
-    SVC_SEND_PACKET,
-    SVCS_DOMAIN,
-    SZ_ADVANCED_FEATURES,
-    SZ_MESSAGE_EVENTS,
-)
-from .version import __version__ as VERSION
-
-_LOGGER = logging.getLogger(__name__)
 
 
-CONFIG_SCHEMA = vol.Schema({DOMAIN: SCH_DOMAIN_CONFIG}, extra=vol.ALLOW_EXTRA)
-
-PLATFORMS = [
-    Platform.BINARY_SENSOR,
-    Platform.CLIMATE,
-    Platform.SENSOR,
-    Platform.WATER_HEATER,
-]
-
-
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+async def async_setup(
+    hass: HomeAssistant,
+    hass_config: ConfigType,
+) -> bool:
     """Create a ramses_rf (RAMSES_II)-based system."""
 
     _LOGGER.info(f"{DOMAIN} v{VERSION}, is using ramses_rf v{ramses_rf.VERSION}")
-    _LOGGER.debug("\r\n\nConfig = %s\r\n", config[DOMAIN])
+    _LOGGER.debug("\r\n\nConfig = %s\r\n", hass_config[DOMAIN])
 
-    coordinator: DataUpdateCoordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        name=DOMAIN,
-        update_interval=config[DOMAIN]["scan_interval"],
-    )
-
-    hass.data[DOMAIN] = {}
-    hass.data[DOMAIN][BROKER] = broker = RamsesBroker(hass, config)
-
-    coordinator.update_method = broker.async_update
-    await broker.start()
+    broker = RamsesCoordinator(hass, hass_config)
+    hass.data[DOMAIN] = {BROKER: broker}
 
     if _LOGGER.isEnabledFor(logging.DEBUG):  # TODO: remove
         app_storage = await broker._async_load_storage()
         _LOGGER.debug("\r\n\nStore = %s\r\n", app_storage)
 
+    await broker.start()
     # NOTE: .async_listen_once(EVENT_HOMEASSISTANT_START, awaitable_coro)
     # NOTE: will be passed event, as: async def awaitable_coro(_event: Event):
-    await coordinator.async_config_entry_first_refresh()  # will save access tokens too
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, broker.async_update)
 
-    register_domain_services(hass, broker)
-    register_domain_events(hass, broker)
+    register_service_functions(hass, broker)
+    register_trigger_events(hass, broker)
 
     return True
 
 
-# TODO: add async_ to routines where required to do so
-@callback  # TODO: the following is a mess - to add register/deregister of clients
-def register_domain_events(hass: HomeAssistantType, broker: RamsesBroker) -> None:
+@callback  # TODO: add async_ to routines where required to do so
+def register_trigger_events(hass: HomeAssistantType, broker):
     """Set up the handlers for the system-wide events."""
 
     @callback
     def process_msg(msg, *args, **kwargs):  # process_msg(msg, prev_msg=None)
-        if (
-            regex := broker.config[SZ_ADVANCED_FEATURES][SZ_MESSAGE_EVENTS]
-        ) and regex.match(f"{msg!r}"):
-            event_data = {
-                "dtm": msg.dtm.isoformat(),
-                "src": msg.src.id,
-                "dst": msg.dst.id,
-                "verb": msg.verb,
-                "code": msg.code,
-                "payload": msg.payload,
-                "packet": str(msg._pkt),
-            }
-            hass.bus.async_fire(f"{DOMAIN}_message", event_data)
+        event_data = {
+            "dtm": msg.dtm.isoformat(),
+            "src": msg.src.id,
+            "dst": msg.dst.id,
+            "verb": msg.verb,
+            "code": msg.code,
+            "payload": msg.payload,
+            "packet": str(msg._pkt),
+        }
+        hass.bus.async_fire(f"{DOMAIN}_message", event_data)
 
-        if broker.learn_device_id and broker.learn_device_id == msg.src.id:
-            event_data = {
-                "src": msg.src.id,
-                "code": msg.code,
-                "packet": str(msg._pkt),
-            }
-            hass.bus.async_fire(f"{DOMAIN}_learn", event_data)
-
-    broker.client.create_client(process_msg)
+    if broker.config[SZ_ADVANCED_FEATURES][SZ_MESSAGE_EVENTS]:
+        broker.client.create_client(process_msg)
 
 
 @callback  # TODO: add async_ to routines where required to do so
-def register_domain_services(hass: HomeAssistantType, broker: RamsesBroker):
+def register_service_functions(hass: HomeAssistantType, broker):
     """Set up the handlers for the domain-wide services."""
 
     @verify_domain_control(hass, DOMAIN)
@@ -288,19 +307,12 @@ def register_domain_services(hass: HomeAssistantType, broker: RamsesBroker):
         hass.helpers.event.async_call_later(5, broker.async_update)
 
     @verify_domain_control(hass, DOMAIN)
-    async def svc_force_update(_: ServiceCall) -> None:
+    async def svc_force_update(call: ServiceCall) -> None:
         await broker.async_update()
 
     @verify_domain_control(hass, DOMAIN)
     async def svc_send_packet(call: ServiceCall) -> None:
-        kwargs = {k: v for k, v in call.data.items()}  # is ReadOnlyDict
-        if (
-            call.data["device_id"] == "18:000730"
-            and kwargs.get("from_id", "18:000730") == "18:000730"
-            and broker.client.hgi.id
-        ):
-            kwargs["device_id"] = broker.client.hgi.id
-        broker.client.send_cmd(broker.client.create_cmd(**kwargs))
+        broker.client.send_cmd(broker.client.create_cmd(**call.data))
         hass.helpers.event.async_call_later(5, broker.async_update)
 
     domain_service = SVCS_DOMAIN
