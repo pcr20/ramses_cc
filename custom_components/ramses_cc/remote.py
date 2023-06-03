@@ -129,11 +129,9 @@ class RamsesRemote(RamsesEntity, RemoteEntity):
         @callback
         def listener(event: Event) -> None:
             """Save the command to storage."""
-            # if event.data["packet"] in self._commands.values():  # TODO
-            #     raise DuplicateError
             self._commands[command[0]] = event.data["packet"]
 
-        if len(command) != 1:  # TODO: Bug was here
+        if len(command) != 1:
             raise TypeError("must be exactly one command to learn")
         if not isinstance(timeout, (float, int)) or not 5 <= timeout <= 300:
             raise TypeError("timeout must be 5 to 300 (default 60)")
@@ -142,9 +140,8 @@ class RamsesRemote(RamsesEntity, RemoteEntity):
             await self.async_delete_command(command)
 
         with self._broker._sem:
-            self._broker.learn_device_id = self._device.id
             remove_listener = self.hass.bus.async_listen(
-                f"{DOMAIN}_learn", listener, event_filter
+                f"{DOMAIN}_message", listener, event_filter
             )
 
             dt_expires = dt.now() + td(seconds=timeout)
@@ -153,7 +150,6 @@ class RamsesRemote(RamsesEntity, RemoteEntity):
                 if self._commands.get(command[0]):
                     break
 
-            self._broker.learn_device_id = None
             remove_listener()
 
     async def async_send_command(
@@ -203,19 +199,18 @@ class RamsesRemote(RamsesEntity, RemoteEntity):
 
         This is a RAMSES-specific convenience wrapper for async_delete_command().
         """
-        await self.async_delete_command(*args, **kwargs)
+        await self.async_learn_command(*args, **kwargs)
 
     async def svc_learn_command(self, *args, **kwargs) -> None:
         """Learn a command from a RAMSES remote and add to the database.
 
         This is a RAMSES-specific convenience wrapper for async_learn_command().
         """
-        kwargs["command"] = [kwargs.pop("command")]
         await self.async_learn_command(*args, **kwargs)
 
     async def svc_send_command(self, *args, **kwargs) -> None:
-        """Send a command as if from a RAMSES remote.
+        """Send a command as is from a RAMSES remote.
 
         This is a RAMSES-specific convenience wrapper for async_send_command().
         """
-        await self.async_send_command(*args, **kwargs)
+        await self.async_learn_command(*args, **kwargs)

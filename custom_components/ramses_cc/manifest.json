@@ -3,9 +3,8 @@
     "name": "RAMSES RF",
     "documentation": "https://github.com/zxdavb/ramses_cc",
     "requirements": [
-      "ramses-rf @ git+https://github.com/pcr20/ramses_rf.git@Branch_0.21.40",
-      "pyserial-asyncio==0.6",
-	  "aioesphomeapi"
+      "ramses-rf==0.21.40",
+      "pyserial-asyncio==0.6"
     ],
     "dependencies": [],
     "issue_tracker": "https://github.com/zxdavb/ramses_cc/issues",

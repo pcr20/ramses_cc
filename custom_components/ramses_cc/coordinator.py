@@ -41,9 +41,7 @@ _LOGGER = logging.getLogger(__name__)
 SAVE_STATE_INTERVAL = td(seconds=300)  # TODO: 5 minutes
 
 
-async def async_handle_exceptions(
-    awaitable: Awaitable, logger: logging.Logger = _LOGGER
-) -> None:
+async def async_handle_exceptions(awaitable: Awaitable, logger=_LOGGER):
     """Wrap the serial port interface to catch/report exceptions."""
     try:
         return await awaitable
@@ -52,7 +50,28 @@ async def async_handle_exceptions(
         raise exc
 
 
-class RamsesBroker:
+# class RamsesCoordinator(DataUpdateCoordinator):
+#     """Class to manage fetching data from single endpoint."""
+
+#     def __init__(
+#         self,
+#         hass: HomeAssistant,
+#         update_interval: td | None = None,
+#     ) -> None:
+
+#         super().__init(
+#             hass,
+#             logger=_LOGGER,
+#             name=DOMAIN,
+#             update_interval=update_interval,
+#             update_method=self.async_update,
+#         )
+
+#     async def async_update():
+#         pass
+
+
+class RamsesCoordinator:
     """Container for client and data."""
 
     def __init__(self, hass, hass_config) -> None:
@@ -85,8 +104,6 @@ class RamsesBroker:
         self._last_update = dt.min
         self._sem = Semaphore(value=1)
 
-        self.learn_device_id = None
-
     async def start(self) -> None:
         """Start the RAMSES co-ordinator."""
 
@@ -96,10 +113,7 @@ class RamsesBroker:
             await self._async_load_client_state()
             _LOGGER.info("Restored the cached state.")
         else:
-            _LOGGER.info(
-                "Not restoring any cached state (disabled), "
-                "consider using 'restore_cache: restore_state: true"
-            )
+            _LOGGER.info("Not restoring any cached state (disabled).")
 
         _LOGGER.debug("Starting the RF monitor...")
         self.loop_task = self.hass.async_create_task(
@@ -154,20 +168,10 @@ class RamsesBroker:
     async def _async_load_client_state(self) -> None:
         """Restore the client state from the application store."""
 
-        _LOGGER.info("Restoring the client state cache (packets)...")
+        _LOGGER.info("Restoring the client state cache (packets only)...")
         app_storage = await self._async_load_storage()
         if client_state := app_storage.get("client_state"):
-            packets = {
-                k: m
-                for k, m in client_state["packets"].items()
-                if dt.fromisoformat(k) > dt.now() - td(days=1)
-                and (
-                    m[41:45] in ("10E0")
-                    or self.config[SZ_RESTORE_CACHE][SZ_RESTORE_SCHEMA]
-                    or m[41:45] not in ("0004", "0005", "000C")
-                )  # force-load new schema (dont use cached schema pkts)
-            }
-            await self.client._set_state(packets=packets)
+            await self.client._set_state(packets=client_state["packets"])
 
     async def async_save_client_state(self, *args, **kwargs) -> None:
         """Save the client state to the application store."""
